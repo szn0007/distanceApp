@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c "python manage.py migrate && gunicorn distanceApp.wsgi:application --bind 0.0.0.0:8000 --workers 3"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:13
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: distanceapp
+      POSTGRES_USER: distance_app_user
+      POSTGRES_PASSWORD: password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U distance_app_user -d distanceapp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
