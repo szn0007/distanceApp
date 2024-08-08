@@ -2,6 +2,11 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_GET
 from .services import LocationService, DistanceService
 from datetime import datetime
+from django.core.cache import cache
+from django.db.models import Q
+
+def sanitize_input(input_str):
+    return input_str.strip().lower()
 
 @require_GET
 def calculate_distance(request):
@@ -17,8 +22,21 @@ def calculate_distance(request):
             }
         }, status=400)
 
-    start_formatted_address, start_lat, start_lng = LocationService.geocode_address(start_address)
-    end_formatted_address, end_lat, end_lng = LocationService.geocode_address(end_address)
+    # sanitize inputs
+    start_address_sanitized = sanitize_input(start_address)
+    end_address_sanitized = sanitize_input(end_address)
+
+    # Construct the cache key using sanitized addresses
+    cache_key = f"{start_address_sanitized}_{end_address_sanitized}"
+
+    # Check if the result is already cached
+    cached_result = cache.get(cache_key)
+    if cached_result:
+        return JsonResponse(cached_result, status=200)
+
+    # Geocode the start and end addresses
+    start_formatted_address, start_lat, start_lng = LocationService.geocode_address(start_address_sanitized)
+    end_formatted_address, end_lat, end_lng = LocationService.geocode_address(end_address_sanitized)
 
     if not start_formatted_address or not end_formatted_address:
         return JsonResponse({
@@ -29,14 +47,15 @@ def calculate_distance(request):
             }
         }, status=400)
 
+    # Retrieve or create start and end location records in the database
     start_location = DistanceService.get_or_create_location(
-        start_address, start_formatted_address, start_lat, start_lng
+        start_address_sanitized, start_formatted_address, start_lat, start_lng
     )
     end_location = DistanceService.get_or_create_location(
-        end_address, end_formatted_address, end_lat, end_lng
+        end_address_sanitized, end_formatted_address, end_lat, end_lng
     )
 
-    # Calculate the distance
+    # Calculate the distance between the start and end locations
     distance_km = LocationService.calculate_distance(start_lat, start_lng, end_lat, end_lng)
 
     # Check if distance calculation was successful
@@ -55,7 +74,7 @@ def calculate_distance(request):
     # Calculate estimated travel time (3 minutes per kilometer)
     estimated_time_minutes = distance_km * 3
 
-    return JsonResponse({
+    result = {
         "status": "success",
         "data": {
             "start_location": {
@@ -87,4 +106,9 @@ def calculate_distance(request):
             "calculated_at": datetime.utcnow().isoformat() + "Z",
             "service": "Google Maps API"
         }
-    }, status=200)
+    }
+
+    # Cache the result with a timeout (e.g., 1 hour)
+    cache.set(cache_key, result, timeout=3600)
+
+    return JsonResponse(result, status=200)
