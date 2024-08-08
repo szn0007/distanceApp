@@ -87,6 +87,9 @@ WSGI_APPLICATION = 'distanceApp.wsgi.application'
 #     }
 # }
 
+# Determine if running in Docker
+DOCKER_ENV = os.getenv('DOCKER_ENV', 'False').lower() in ('true', '1', 't')
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -94,6 +97,7 @@ DATABASES = {
         'USER': secrets.get('DATABASE_USER'),
         'PASSWORD': secrets.get('DATABASE_PASSWORD'),
         'HOST': secrets.get('DATABASE_HOST'),
+        'HOST': 'db' if DOCKER_ENV else secrets.get('DATABASE_HOST'),
         'PORT': secrets.get('DATABASE_PORT'),
     }
 }
