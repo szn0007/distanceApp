@@ -120,7 +120,7 @@ class DistanceViewTest(TestCase):
             "status": "error",
             "error": {
                 "code": "GEOCODING_FAILED",
-                "message": "Could not geocode the provided addresses."
+                "message": "Could not geocode the start address."
             }
         })
 
@@ -149,3 +149,59 @@ class DistanceViewTest(TestCase):
                 "message": "Could not calculate distance between the provided locations."
             }
         })
+
+    @patch('distance.services.LocationService.geocode_address')
+    @patch('distance.services.LocationService.calculate_distance')
+    def test_calculate_distance_view_with_similar_names(self, mock_calculate_distance, mock_geocode_address):
+        # Mock the responses for geocode and distance calculation
+        mock_geocode_address.side_effect = [
+            ("Walt Disney Concert Hall", 34.055, -118.249),  # Start location
+            ("Disney Concert Hall", 34.055, -118.249)       # End location
+        ]
+        mock_calculate_distance.return_value = 0.0  # Same location, so distance is 0
+
+        response = self.client.get(reverse('calculate_distance'), {
+            'start': 'Walt Disney Concert Hall',
+            'end': 'Disney Concert Hall'
+        })
+
+        expected_response = {
+            "status": "success",
+            "data": {
+                "start_location": {
+                    "formatted_address": "Walt Disney Concert Hall",
+                    "coordinates": {
+                        "latitude": 34.055,
+                        "longitude": -118.249
+                    }
+                },
+                "end_location": {
+                    "formatted_address": "Disney Concert Hall",
+                    "coordinates": {
+                        "latitude": 34.055,
+                        "longitude": -118.249
+                    }
+                },
+                "route": {
+                    "distance": {
+                        "value": 0.0,
+                        "unit": "kilometers"
+                    },
+                    "estimated_time": {
+                        "value": 0.0,
+                        "unit": "minutes"
+                    }
+                }
+            },
+            "metadata": {
+                "calculated_at": datetime.utcnow().isoformat()[:-7] + "Z",
+                "service": "Google Maps API"
+            }
+        }
+
+        self.assertEqual(response.status_code, 200)
+        actual_response = response.json()
+        self.assertEqual(actual_response['status'], expected_response['status'])
+        self.assertEqual(actual_response['data'], expected_response['data'])
+        self.assertEqual(actual_response['metadata']['service'], expected_response['metadata']['service'])
+
