@@ -2,7 +2,7 @@ import requests
 from django.conf import settings
 from .models import Location, DistanceRecord
 from django.core.exceptions import ObjectDoesNotExist
-
+from django.contrib.postgres.search import SearchVector
 
 class LocationService:
     @staticmethod
@@ -55,6 +55,13 @@ class DistanceService:
                 'longitude': lng
             }
         )
+        # If location is created, update the search_vector field without triggering the save signal
+        if created:
+            location.search_vector = (
+                SearchVector('name', weight='A') +
+                SearchVector('address', weight='B')
+            )
+            location.save(update_fields=['search_vector'])
         return location
 
     @staticmethod

@@ -1,11 +1,18 @@
+from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
+
+from .models import Location
 from .services import LocationService, DistanceService
 from datetime import datetime
 from django.core.cache import cache
-from django.db.models import Q
+from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
+from django.contrib.postgres.search import TrigramSimilarity
 
 def sanitize_input(input_str):
+    """
+    sanitize user input for more effective matching.
+    """
     return input_str.strip().lower()
 
 @require_GET
@@ -28,35 +35,61 @@ def calculate_distance(request):
 
     # Construct the cache key using sanitized addresses
     cache_key = f"{start_address_sanitized}_{end_address_sanitized}"
+    # cache.delete(cache_key)
 
     # Check if the result is already cached
     cached_result = cache.get(cache_key)
     if cached_result:
         return JsonResponse(cached_result, status=200)
 
-    # Geocode the start and end addresses
-    start_formatted_address, start_lat, start_lng = LocationService.geocode_address(start_address_sanitized)
-    end_formatted_address, end_lat, end_lng = LocationService.geocode_address(end_address_sanitized)
+    # Full-text search for start and end locations
+    start_search_query = SearchQuery(start_address_sanitized)
+    end_search_query = SearchQuery(end_address_sanitized)
+    start_search_vector = SearchVector('name', weight='A') + SearchVector('address', weight='B')
+    end_search_vector = SearchVector('name', weight='A') + SearchVector('address', weight='B')
 
-    if not start_formatted_address or not end_formatted_address:
-        return JsonResponse({
-            "status": "error",
-            "error": {
-                "code": "GEOCODING_FAILED",
-                "message": "Could not geocode the provided addresses."
-            }
-        }, status=400)
+    # Use Trigram Similarity for more nuanced matching
+    start_location = Location.objects.annotate(
+        rank=SearchRank(start_search_vector, start_search_query),
+        similarity=TrigramSimilarity('name', start_address_sanitized) + TrigramSimilarity('address', start_address_sanitized)
+    ).filter(similarity__gt=0.3).order_by('-similarity', '-rank').first()
 
-    # Retrieve or create start and end location records in the database
-    start_location = DistanceService.get_or_create_location(
-        start_address_sanitized, start_formatted_address, start_lat, start_lng
-    )
-    end_location = DistanceService.get_or_create_location(
-        end_address_sanitized, end_formatted_address, end_lat, end_lng
-    )
+    end_location = Location.objects.annotate(
+        rank=SearchRank(end_search_vector, end_search_query),
+        similarity=TrigramSimilarity('name', end_address_sanitized) + TrigramSimilarity('address', end_address_sanitized)
+    ).filter(similarity__gt=0.3).order_by('-similarity', '-rank').first()
+
+    # Geocode the start and end addresses if not found in the database
+    if not start_location:
+        start_formatted_address, start_lat, start_lng = LocationService.geocode_address(start_address_sanitized)
+        if not start_formatted_address:
+            return JsonResponse({
+                "status": "error",
+                "error": {
+                    "code": "GEOCODING_FAILED",
+                    "message": "Could not geocode the start address."
+                }
+            }, status=400)
+        start_location = DistanceService.get_or_create_location(
+            start_address_sanitized, start_formatted_address, start_lat, start_lng
+        )
+
+    if not end_location:
+        end_formatted_address, end_lat, end_lng = LocationService.geocode_address(end_address_sanitized)
+        if not end_formatted_address:
+            return JsonResponse({
+                "status": "error",
+                "error": {
+                    "code": "GEOCODING_FAILED",
+                    "message": "Could not geocode the end address."
+                }
+            }, status=400)
+        end_location = DistanceService.get_or_create_location(
+            end_address_sanitized, end_formatted_address, end_lat, end_lng
+        )
 
     # Calculate the distance between the start and end locations
-    distance_km = LocationService.calculate_distance(start_lat, start_lng, end_lat, end_lng)
+    distance_km = LocationService.calculate_distance(start_location.latitude, start_location.longitude, end_location.latitude, end_location.longitude)
 
     # Check if distance calculation was successful
     if distance_km is None:
@@ -78,17 +111,17 @@ def calculate_distance(request):
         "status": "success",
         "data": {
             "start_location": {
-                "formatted_address": start_formatted_address,
+                "formatted_address": start_location.address,
                 "coordinates": {
-                    "latitude": start_lat,
-                    "longitude": start_lng
+                    "latitude": start_location.latitude,
+                    "longitude": start_location.longitude
                 }
             },
             "end_location": {
-                "formatted_address": end_formatted_address,
+                "formatted_address": end_location.address,
                 "coordinates": {
-                    "latitude": end_lat,
-                    "longitude": end_lng
+                    "latitude": end_location.latitude,
+                    "longitude": end_location.longitude
                 }
             },
             "route": {
@@ -108,7 +141,7 @@ def calculate_distance(request):
         }
     }
 
-    # Cache the result with a timeout (e.g., 1 hour)
+    # Cache the result with a timeout
     cache.set(cache_key, result, timeout=3600)
 
     return JsonResponse(result, status=200)

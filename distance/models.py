@@ -1,3 +1,6 @@
+# models.py
+from django.contrib.postgres.search import SearchVectorField
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 
 class Location(models.Model):
@@ -5,11 +8,13 @@ class Location(models.Model):
     address = models.CharField(max_length=255)
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    search_vector = SearchVectorField(null=True)  # Full-text search vector
 
     class Meta:
         indexes = [
             models.Index(fields=['name']),
             models.Index(fields=['latitude', 'longitude']),
+            GinIndex(fields=['search_vector']),  # GIN index for full-text search
         ]
 
     def __str__(self):
